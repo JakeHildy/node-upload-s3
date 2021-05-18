@@ -3,6 +3,7 @@ const express = require("express");
 const multer = require("multer");
 const AWS = require("aws-sdk");
 const uuid = require("uuid/v4");
+const sharp = require("sharp");
 
 const app = express();
 PORT = 3000;
@@ -22,24 +23,58 @@ const storage = multer.memoryStorage({
 
 const upload = multer({ storage }).single("image");
 
-app.post(`/upload`, upload, (req, res) => {
+app.post(`/upload`, upload, async (req, res) => {
   let [myName, fileType] = req.file.originalname.split(".");
 
   // console.log(req.files); if multiple files *
-  console.log(myName, fileType);
 
-  const params = {
-    Bucket: `${process.env.AWS_BUCKET_NAME}`,
-    Key: `${uuid()}.${fileType}`,
-    Body: req.file.buffer,
-  };
+  try {
+    const imageData = await sharp(req.file.buffer).metadata();
+    const image375Buffer = await sharp(req.file.buffer)
+      .resize(375)
+      .png()
+      .toBuffer();
+    const image768Buffer = await sharp(req.file.buffer)
+      .resize(768)
+      .png()
+      .toBuffer();
+    const image1200Buffer = await sharp(req.file.buffer)
+      .resize(1200)
+      .png()
+      .toBuffer();
 
-  s3.upload(params, (error, data) => {
-    if (error) {
-      return res.send(500).send(error);
-    }
-    res.status(200).send(data);
-  });
+    // --- Upload 375 ---
+    const params375 = {
+      Bucket: `${process.env.AWS_BUCKET_NAME}`,
+      Key: `${uuid()}-375px.${fileType}`,
+      Body: image375Buffer,
+    };
+    const params768 = {
+      Bucket: `${process.env.AWS_BUCKET_NAME}`,
+      Key: `${uuid()}-768px.${fileType}`,
+      Body: image768Buffer,
+    };
+    const params1200 = {
+      Bucket: `${process.env.AWS_BUCKET_NAME}`,
+      Key: `${uuid()}-1200px.${fileType}`,
+      Body: image1200Buffer,
+    };
+
+    const params = [params375, params768, params1200];
+    const images = [];
+
+    await (function () {
+      params.forEach(async (param, index, array) => {
+        const stored = await s3.upload(param).promise();
+        images.push(stored);
+        if (index === array.length - 1) {
+          res.status(200).send(images);
+        }
+      });
+    })();
+  } catch (err) {
+    console.log(err);
+  }
 });
 
 ////////////////////////////
