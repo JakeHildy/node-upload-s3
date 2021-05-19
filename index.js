@@ -1,17 +1,12 @@
 require("dotenv/config");
 const express = require("express");
 const multer = require("multer");
-const AWS = require("aws-sdk");
-const uuid = require("uuid/v4");
+
 const sharp = require("sharp");
+const { uploadToS3, deleteFile } = require("./amazonS3");
 
 const app = express();
 PORT = 3000;
-
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ID,
-  secretAccessKey: process.env.AWS_SECRET,
-});
 
 app.use(express.json());
 app.use(express.static("public"));
@@ -24,23 +19,14 @@ const storage = multer.memoryStorage({
 
 const upload = multer({ storage }).single("image");
 
-function uploadToS3(resolution, imgBuffer) {
-  const params = {
-    Bucket: `${process.env.AWS_BUCKET_NAME}`,
-    Key: `${uuid()}-${resolution}px.png`,
-    Body: imgBuffer,
-  };
-  return new Promise((resolve, reject) => {
-    s3.upload(params)
-      .promise()
-      .then((data) => {
-        resolve(data);
-      })
-      .catch((err) => {
-        reject(new Error(err));
-      });
-  });
-}
+app.delete(`/:name`, async (req, res) => {
+  try {
+    const s3Res = await deleteFile(req.params.name);
+    res.status(200).json({ status: "success", message: s3Res });
+  } catch (err) {
+    res.status(500).json({ status: "fail", error: err.message });
+  }
+});
 
 app.post(`/upload`, upload, async (req, res) => {
   try {
@@ -68,10 +54,9 @@ app.post(`/upload`, upload, async (req, res) => {
       })
     );
 
-    // Upload image data to the MongoDB
-    console.log(data);
+    // Upload image data to the MongoDB TODO
   } catch (err) {
-    console.log(err);
+    res.status(500).json({ status: "fail", error: err.message });
   }
 });
 
