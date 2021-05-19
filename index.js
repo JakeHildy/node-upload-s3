@@ -14,6 +14,7 @@ const s3 = new AWS.S3({
 });
 
 app.use(express.json());
+app.use(express.static("public"));
 
 const storage = multer.memoryStorage({
   destination: (req, file, callback) => {
@@ -23,55 +24,52 @@ const storage = multer.memoryStorage({
 
 const upload = multer({ storage }).single("image");
 
+function uploadToS3(resolution, imgBuffer) {
+  const params = {
+    Bucket: `${process.env.AWS_BUCKET_NAME}`,
+    Key: `${uuid()}-${resolution}px.png`,
+    Body: imgBuffer,
+  };
+  return new Promise((resolve, reject) => {
+    s3.upload(params)
+      .promise()
+      .then((data) => {
+        resolve(data);
+      })
+      .catch((err) => {
+        reject(new Error(err));
+      });
+  });
+}
+
 app.post(`/upload`, upload, async (req, res) => {
-  let [myName, fileType] = req.file.originalname.split(".");
-
-  // console.log(req.files); if multiple files *
-
   try {
-    const imageData = await sharp(req.file.buffer).metadata();
-    const image375Buffer = await sharp(req.file.buffer)
+    let [myName] = req.file.originalname.split(".");
+    const localFileName = `${Date.now()}-${myName}.png`;
+
+    // Rezise and save locally
+    await sharp(req.file.buffer)
       .resize(375)
       .png()
-      .toBuffer();
-    const image768Buffer = await sharp(req.file.buffer)
-      .resize(768)
-      .png()
-      .toBuffer();
-    const image1200Buffer = await sharp(req.file.buffer)
-      .resize(1200)
-      .png()
-      .toBuffer();
+      .toFile(`public/${localFileName}`);
 
-    // --- Upload 375 ---
-    const params375 = {
-      Bucket: `${process.env.AWS_BUCKET_NAME}`,
-      Key: `${uuid()}-375px.${fileType}`,
-      Body: image375Buffer,
-    };
-    const params768 = {
-      Bucket: `${process.env.AWS_BUCKET_NAME}`,
-      Key: `${uuid()}-768px.${fileType}`,
-      Body: image768Buffer,
-    };
-    const params1200 = {
-      Bucket: `${process.env.AWS_BUCKET_NAME}`,
-      Key: `${uuid()}-1200px.${fileType}`,
-      Body: image1200Buffer,
-    };
+    res.status(200).json({ status: "success", localFileName });
 
-    const params = [params375, params768, params1200];
-    const images = [];
+    // Create Buffers for each size
+    const sizes = [375, 768];
+    const buffers = await Promise.all(
+      sizes.map((size) => sharp(req.file.buffer).resize(size).png().toBuffer())
+    );
 
-    await (function () {
-      params.forEach(async (param, index, array) => {
-        const stored = await s3.upload(param).promise();
-        images.push(stored);
-        if (index === array.length - 1) {
-          res.status(200).send(images);
-        }
-      });
-    })();
+    // Upload Images to Amazon S3
+    const data = await Promise.all(
+      sizes.map((size, i) => {
+        return uploadToS3(size, buffers[i]);
+      })
+    );
+
+    // Upload image data to the MongoDB
+    console.log(data);
   } catch (err) {
     console.log(err);
   }
